@@ -361,6 +361,7 @@ private:
     std::vector<VkImageView> swapchainImageViews;
     VkRenderPass renderPass = nullptr;
     VkPipelineLayout pipelineLayout = nullptr;
+    VkPipeline graphicsPipeline = nullptr;
 
     void initiateWindow()
     {
@@ -399,6 +400,7 @@ private:
 
     void cleanup() const
     {
+        vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);
         for (const auto imageView : swapchainImageViews)
@@ -736,18 +738,6 @@ private:
             vertexShaderStageCreateInfo,
             fragmentShaderStageCreateInfo};
 
-        const std::vector<VkDynamicState> dynamicStates = {
-            VK_DYNAMIC_STATE_VIEWPORT,
-            VK_DYNAMIC_STATE_LINE_WIDTH
-        };
-
-        VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo{};
-        dynamicStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dynamicStateCreateInfo.pNext = nullptr;
-        dynamicStateCreateInfo.flags = 0;
-        dynamicStateCreateInfo.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
-        dynamicStateCreateInfo.pDynamicStates = dynamicStates.data();
-
         VkPipelineVertexInputStateCreateInfo vertexInputStateCreateInfo{};
         vertexInputStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertexInputStateCreateInfo.pNext = nullptr;
@@ -837,6 +827,18 @@ private:
         colorBlendStateCreateInfo.blendConstants[2] = 0.0f;
         colorBlendStateCreateInfo.blendConstants[3] = 0.0f;
 
+        const std::vector<VkDynamicState> dynamicStates = {
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_LINE_WIDTH
+        };
+
+        VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo{};
+        dynamicStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamicStateCreateInfo.pNext = nullptr;
+        dynamicStateCreateInfo.flags = 0;
+        dynamicStateCreateInfo.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+        dynamicStateCreateInfo.pDynamicStates = dynamicStates.data();
+
         VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
         pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pipelineLayoutCreateInfo.pNext = nullptr;
@@ -849,6 +851,32 @@ private:
         if (const VkResult result = vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout); result != VK_SUCCESS)
         {
             throw std::runtime_error("Failed to create pipeline layout with error code: " + std::to_string(result));
+        }
+
+        VkGraphicsPipelineCreateInfo pipelineCreateInfo{};
+        pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineCreateInfo.pNext = nullptr;
+        pipelineCreateInfo.flags = 0;
+        pipelineCreateInfo.stageCount = static_cast<uint32_t>(shaderStageCreateInfos.size());
+        pipelineCreateInfo.pStages = shaderStageCreateInfos.data();
+        pipelineCreateInfo.pVertexInputState = &vertexInputStateCreateInfo;
+        pipelineCreateInfo.pInputAssemblyState = &inputAssemblyStateCreateInfo;
+        pipelineCreateInfo.pTessellationState = nullptr;
+        pipelineCreateInfo.pViewportState = &viewportStateCreateInfo;
+        pipelineCreateInfo.pRasterizationState = &rasterizationStateCreateInfo;
+        pipelineCreateInfo.pMultisampleState = &multisampleStateCreateInfo;
+        pipelineCreateInfo.pDepthStencilState = nullptr;
+        pipelineCreateInfo.pColorBlendState = &colorBlendStateCreateInfo;
+        pipelineCreateInfo.pDynamicState = &dynamicStateCreateInfo;
+        pipelineCreateInfo.layout = pipelineLayout;
+        pipelineCreateInfo.renderPass = renderPass;
+        pipelineCreateInfo.subpass = 0;
+        pipelineCreateInfo.basePipelineHandle = nullptr;
+        pipelineCreateInfo.basePipelineIndex = -1;
+
+        if (const VkResult result = vkCreateGraphicsPipelines(device, nullptr, 1, &pipelineCreateInfo, nullptr, &graphicsPipeline); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create graphics pipeline with error code: " + std::to_string(result));
         }
 
         vkDestroyShaderModule(device, fragmentShaderModule, nullptr);
