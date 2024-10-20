@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <optional>
 #include <set>
+#include <fstream>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
@@ -243,7 +244,7 @@ bool isDeviceSuitable(const VkPhysicalDevice device, const VkSurfaceKHR surface)
             swapChainAdequate;
 }
 
-VkSurfaceFormatKHR getSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
+VkSurfaceFormatKHR getSwapChainSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
 {
     for (const auto& availableFormat : availableFormats)
     {
@@ -255,7 +256,7 @@ VkSurfaceFormatKHR getSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& a
     return availableFormats[0];
 }
 
-VkPresentModeKHR getSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes)
+VkPresentModeKHR getSwapChainPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes)
 {
     for (const auto& availablePresentMode : availablePresentModes)
     {
@@ -268,7 +269,7 @@ VkPresentModeKHR getSwapPresentMode(const std::vector<VkPresentModeKHR>& availab
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
-VkExtent2D getSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, GLFWwindow* window)
+VkExtent2D getSwapChainExtent(const VkSurfaceCapabilitiesKHR& capabilities, GLFWwindow* window)
 {
     if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
     {
@@ -293,6 +294,43 @@ VkExtent2D getSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, GLFWwindo
         capabilities.maxImageExtent.height);
 
     return actualExtent;
+}
+
+std::vector<char> readFile(const std::string& filename)
+{
+    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+    if (!file.is_open())
+    {
+        throw std::runtime_error("Failed to open file: " + filename);
+    }
+    const size_t fileSize = static_cast<size_t>(file.tellg());
+
+    std::vector<char> buffer(fileSize);
+
+    file.seekg(0);
+    file.read(buffer.data(), static_cast<std::streamsize>(fileSize));
+
+    file.close();
+
+    return buffer;
+}
+
+VkShaderModule getShaderModule(const std::vector<char>& code, const VkDevice device)
+{
+    VkShaderModuleCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.pNext = nullptr;
+    createInfo.flags = 0;
+    createInfo.codeSize = code.size();
+    createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+
+    VkShaderModule shaderModule;
+    if (const VkResult result = vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule); result != VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to create shader module with error code: " + std::to_string(result));
+    }
+
+    return shaderModule;
 }
 
 
@@ -345,6 +383,7 @@ private:
         setupQueues();
         createSwapChain();
         createImageViews();
+        createGraphicsPipeline();
     }
 
     void mainLoop() const
@@ -518,8 +557,6 @@ private:
         vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
     }
 
-    void setupSwapChainExtent();
-
     void createSwapChain()
     {
         const SwapChainSupportDetails swapChainSupportDetails = querySwapChainSupport(physicalDevice, surface);
@@ -531,9 +568,9 @@ private:
             minImageCount = swapChainSupportDetails.capabilities.maxImageCount;
         }
 
-        const VkSurfaceFormatKHR surfaceFormat = getSwapSurfaceFormat(swapChainSupportDetails.formats);
+        const VkSurfaceFormatKHR surfaceFormat = getSwapChainSurfaceFormat(swapChainSupportDetails.formats);
 
-        const VkExtent2D extent = getSwapExtent(swapChainSupportDetails.capabilities, window);
+        const VkExtent2D extent = getSwapChainExtent(swapChainSupportDetails.capabilities, window);
 
         VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         const QueueFamilyIndices indices = findQueueFamilies(physicalDevice, surface);
@@ -544,7 +581,7 @@ private:
             queueFamilyIndices = {indices.graphicsFamily.value(), indices.presentFamily.value()};
         }
 
-        const VkPresentModeKHR presentMode = getSwapPresentMode(swapChainSupportDetails.presentModes);
+        const VkPresentModeKHR presentMode = getSwapChainPresentMode(swapChainSupportDetails.presentModes);
 
         VkSwapchainCreateInfoKHR createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -618,6 +655,40 @@ private:
                 throw std::runtime_error("Failed to create image views with error code: " + std::to_string(result));
             }
         }
+    }
+
+    void createGraphicsPipeline()
+    {
+        const std::vector<char> vertexShaderCode = readFile("../shaders/vertex.spv");
+        const std::vector<char> fragmentShaderCode = readFile("../shaders/fragment.spv");
+
+        const VkShaderModule vertexShaderModule = getShaderModule(vertexShaderCode, device);
+        const VkShaderModule fragmentShaderModule = getShaderModule(fragmentShaderCode, device);
+
+        VkPipelineShaderStageCreateInfo vertexShaderStageCreateInfo{};
+        vertexShaderStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertexShaderStageCreateInfo.pNext = nullptr;
+        vertexShaderStageCreateInfo.flags = 0;
+        vertexShaderStageCreateInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+        vertexShaderStageCreateInfo.module = vertexShaderModule;
+        vertexShaderStageCreateInfo.pName = "main";
+        vertexShaderStageCreateInfo.pSpecializationInfo = nullptr;
+
+        VkPipelineShaderStageCreateInfo fragmentShaderStageCreateInfo{};
+        fragmentShaderStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragmentShaderStageCreateInfo.pNext = nullptr;
+        fragmentShaderStageCreateInfo.flags = 0;
+        fragmentShaderStageCreateInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragmentShaderStageCreateInfo.module = fragmentShaderModule;
+        fragmentShaderStageCreateInfo.pName = "main";
+        fragmentShaderStageCreateInfo.pSpecializationInfo = nullptr;
+
+        VkPipelineShaderStageCreateInfo shaderStages[] = {
+            vertexShaderStageCreateInfo,
+            fragmentShaderStageCreateInfo};
+
+        vkDestroyShaderModule(device, fragmentShaderModule, nullptr);
+        vkDestroyShaderModule(device, vertexShaderModule, nullptr);
     }
 };
 
