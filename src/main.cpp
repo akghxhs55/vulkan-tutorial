@@ -320,6 +320,7 @@ private:
     VkFormat swapChainImageFormat = VK_FORMAT_UNDEFINED;
     VkExtent2D swapChainExtent = {};
     std::vector<VkImage> swapChainImages;
+    std::vector<VkImageView> swapChainImageViews;
 
     void initiateWindow()
     {
@@ -343,6 +344,7 @@ private:
         createDevice();
         setupQueues();
         createSwapChain();
+        createImageViews();
     }
 
     void mainLoop() const
@@ -355,6 +357,10 @@ private:
 
     void cleanup() const
     {
+        for (const auto imageView : swapChainImageViews)
+        {
+            vkDestroyImageView(device, imageView, nullptr);
+        }
         vkDestroySwapchainKHR(device, swapChain, nullptr);
         vkDestroyDevice(device, nullptr);
         vkDestroySurfaceKHR(instance, surface, nullptr);
@@ -565,13 +571,53 @@ private:
             throw std::runtime_error("Failed to create swap chain with error code: " + std::to_string(result));
         }
 
+        swapChainImageFormat = surfaceFormat.format;
+
+        swapChainExtent = extent;
+
         uint32_t imageCount = 0;
         vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
         swapChainImages.resize(imageCount);
         vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
 
-        swapChainImageFormat = surfaceFormat.format;
-        swapChainExtent = extent;
+    }
+
+    void createImageViews()
+    {
+        swapChainImageViews.resize(swapChainImages.size());
+
+        for (size_t i = 0; i < swapChainImages.size(); i++)
+        {
+            constexpr VkComponentMapping components{
+                VK_COMPONENT_SWIZZLE_IDENTITY,
+                VK_COMPONENT_SWIZZLE_IDENTITY,
+                VK_COMPONENT_SWIZZLE_IDENTITY,
+                VK_COMPONENT_SWIZZLE_IDENTITY
+            };
+
+            constexpr VkImageSubresourceRange subresourceRange{
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                0,
+                1,
+                0,
+                1
+            };
+
+            VkImageViewCreateInfo createInfo{};
+            createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            createInfo.pNext = nullptr;
+            createInfo.flags = 0;
+            createInfo.image = swapChainImages[i];
+            createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            createInfo.format = swapChainImageFormat;
+            createInfo.components = components;
+            createInfo.subresourceRange = subresourceRange;
+
+            if (const VkResult result = vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]); result != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to create image views with error code: " + std::to_string(result));
+            }
+        }
     }
 };
 
