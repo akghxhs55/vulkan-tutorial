@@ -336,6 +336,7 @@ VkShaderModule getShaderModule(const std::vector<char>& code, const VkDevice dev
 VkViewport getViewport(const VkExtent2D extent)
 {
     VkViewport viewport{};
+
     viewport.x = 0.0f;
     viewport.y = 0.0f;
     viewport.width = static_cast<float>(extent.width);
@@ -349,6 +350,7 @@ VkViewport getViewport(const VkExtent2D extent)
 VkRect2D getScissor(const VkExtent2D extent)
 {
     VkRect2D scissor{};
+
     scissor.offset = {0, 0};
     scissor.extent = extent;
 
@@ -387,6 +389,9 @@ private:
     std::vector<VkFramebuffer> swapchainFramebuffers;
     VkCommandPool commandPool = nullptr;
     VkCommandBuffer commandBuffer = nullptr;
+    VkSemaphore imageAvailableSemaphore = nullptr;
+    VkSemaphore renderFinishedSemaphore = nullptr;
+    VkFence inFlightFence = nullptr;
 
     void initiateWindow()
     {
@@ -416,6 +421,7 @@ private:
         createFramebuffers();
         createCommandPool();
         createCommandBuffer();
+        createSyncObjects();
     }
 
     void mainLoop() const
@@ -423,11 +429,17 @@ private:
         while (!glfwWindowShouldClose(window))
         {
             glfwPollEvents();
+            drawFrame();
         }
+
+        vkDeviceWaitIdle(device);
     }
 
     void cleanup() const
     {
+        vkDestroyFence(device, inFlightFence, nullptr);
+        vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
+        vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
         vkDestroyCommandPool(device, commandPool, nullptr);
         for (const auto framebuffer : swapchainFramebuffers)
         {
@@ -724,6 +736,15 @@ private:
         subpassDescription.preserveAttachmentCount = 0;
         subpassDescription.pPreserveAttachments = nullptr;
 
+        VkSubpassDependency subpassDependency{};
+        subpassDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        subpassDependency.dstSubpass = 0;
+        subpassDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        subpassDependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        subpassDependency.srcAccessMask = 0;
+        subpassDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        subpassDependency.dependencyFlags = 0;
+
         VkRenderPassCreateInfo renderPassCreateInfo{};
         renderPassCreateInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         renderPassCreateInfo.pNext = nullptr;
@@ -732,8 +753,8 @@ private:
         renderPassCreateInfo.pAttachments = &colorAttachmentDescription;
         renderPassCreateInfo.subpassCount = 1;
         renderPassCreateInfo.pSubpasses = &subpassDescription;
-        renderPassCreateInfo.dependencyCount = 0;
-        renderPassCreateInfo.pDependencies = nullptr;
+        renderPassCreateInfo.dependencyCount = 1;
+        renderPassCreateInfo.pDependencies = &subpassDependency;
 
         if (const VkResult result = vkCreateRenderPass(device, &renderPassCreateInfo, nullptr, &renderPass); result != VK_SUCCESS)
         {
@@ -854,7 +875,7 @@ private:
 
         const std::vector<VkDynamicState> dynamicStates = {
             VK_DYNAMIC_STATE_VIEWPORT,
-            VK_DYNAMIC_STATE_LINE_WIDTH
+            VK_DYNAMIC_STATE_SCISSOR
         };
 
         VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo{};
@@ -967,7 +988,85 @@ private:
         }
     }
 
-    void recordCommandBuffer(const uint32_t imageIndex)
+    void createSyncObjects()
+    {
+        VkSemaphoreCreateInfo semaphoreCreateInfo{};
+        semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        semaphoreCreateInfo.pNext = nullptr;
+        semaphoreCreateInfo.flags = 0;
+
+        if (const VkResult result = vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &imageAvailableSemaphore); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create image available semaphore with error code: " + std::to_string(result));
+        }
+
+        if (const VkResult result = vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &renderFinishedSemaphore); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create render finished semaphore with error code: " + std::to_string(result));
+        }
+
+        VkFenceCreateInfo fenceCreateInfo{};
+        fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fenceCreateInfo.pNext = nullptr;
+        fenceCreateInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+        if (const VkResult result = vkCreateFence(device, &fenceCreateInfo, nullptr, &inFlightFence); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create in flight fence with error code: " + std::to_string(result));
+        }
+    }
+
+    void drawFrame() const
+    {
+        vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, std::numeric_limits<uint64_t>::max());
+        vkResetFences(device, 1, &inFlightFence);
+
+        uint32_t imageIndex;
+        if (const VkResult result = vkAcquireNextImageKHR(device, swapchain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to acquire next image with error code: " + std::to_string(result));
+        }
+
+        vkResetCommandBuffer(commandBuffer, 0);
+        recordCommandBuffer(commandBuffer, imageIndex);
+
+        const std::vector<VkSemaphore> waitSemaphores = {imageAvailableSemaphore};
+        const std::vector<VkPipelineStageFlags> waitStages = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        const std::vector<VkSemaphore> signalSemaphores = {renderFinishedSemaphore};
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.pNext = nullptr;
+        submitInfo.waitSemaphoreCount = static_cast<uint32_t>(waitSemaphores.size());
+        submitInfo.pWaitSemaphores = waitSemaphores.data();
+        submitInfo.pWaitDstStageMask = waitStages.data();
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+        submitInfo.signalSemaphoreCount = static_cast<uint32_t>(signalSemaphores.size());
+        submitInfo.pSignalSemaphores = signalSemaphores.data();
+
+        if (const VkResult result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to submit draw command buffer with error code: " + std::to_string(result));
+        }
+
+        VkPresentInfoKHR presentInfo{};
+        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        presentInfo.pNext = nullptr;
+        presentInfo.waitSemaphoreCount = static_cast<uint32_t>(signalSemaphores.size());
+        presentInfo.pWaitSemaphores = signalSemaphores.data();
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = &swapchain;
+        presentInfo.pImageIndices = &imageIndex;
+        presentInfo.pResults = nullptr;
+
+        if (const VkResult result = vkQueuePresentKHR(presentQueue, &presentInfo); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to present image with error code: " + std::to_string(result));
+        }
+    }
+
+    void recordCommandBuffer(const VkCommandBuffer commandBuffer, const uint32_t imageIndex) const
     {
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
