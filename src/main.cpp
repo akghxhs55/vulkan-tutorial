@@ -333,6 +333,28 @@ VkShaderModule getShaderModule(const std::vector<char>& code, const VkDevice dev
     return shaderModule;
 }
 
+VkViewport getViewport(const VkExtent2D extent)
+{
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = static_cast<float>(extent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    return viewport;
+}
+
+VkRect2D getScissor(const VkExtent2D extent)
+{
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = extent;
+
+    return scissor;
+}
+
 
 class HelloTriangleApplication
 {
@@ -363,6 +385,8 @@ private:
     VkPipelineLayout pipelineLayout = nullptr;
     VkPipeline graphicsPipeline = nullptr;
     std::vector<VkFramebuffer> swapchainFramebuffers;
+    VkCommandPool commandPool = nullptr;
+    VkCommandBuffer commandBuffer = nullptr;
 
     void initiateWindow()
     {
@@ -390,6 +414,8 @@ private:
         createRenderPass();
         createGraphicsPipeline();
         createFramebuffers();
+        createCommandPool();
+        createCommandBuffer();
     }
 
     void mainLoop() const
@@ -402,6 +428,7 @@ private:
 
     void cleanup() const
     {
+        vkDestroyCommandPool(device, commandPool, nullptr);
         for (const auto framebuffer : swapchainFramebuffers)
         {
             vkDestroyFramebuffer(device, framebuffer, nullptr);
@@ -760,17 +787,9 @@ private:
         inputAssemblyStateCreateInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         inputAssemblyStateCreateInfo.primitiveRestartEnable = VK_FALSE;
 
-        VkViewport viewport{};
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;
-        viewport.width = static_cast<float>(swapchainExtent.width);
-        viewport.height = static_cast<float>(swapchainExtent.height);
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
+        const VkViewport viewport = getViewport(swapchainExtent);
 
-        VkRect2D scissor{};
-        scissor.offset = {0, 0};
-        scissor.extent = swapchainExtent;
+        const VkRect2D scissor = getScissor(swapchainExtent);
 
         VkPipelineViewportStateCreateInfo viewportStateCreateInfo{};
         viewportStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -914,6 +933,82 @@ private:
             {
                 throw std::runtime_error("Failed to create framebuffer with error code: " + std::to_string(result));
             }
+        }
+    }
+
+    void createCommandPool()
+    {
+        const QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice, surface);
+
+        VkCommandPoolCreateInfo commandPoolCreateInfo{};
+        commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        commandPoolCreateInfo.pNext = nullptr;
+        commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        commandPoolCreateInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
+
+        if (const VkResult result = vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &commandPool); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create command pool with error code: " + std::to_string(result));
+        }
+    }
+
+    void createCommandBuffer()
+    {
+        VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
+        commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        commandBufferAllocateInfo.pNext = nullptr;
+        commandBufferAllocateInfo.commandPool = commandPool;
+        commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        commandBufferAllocateInfo.commandBufferCount = 1;
+
+        if (const VkResult result = vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &commandBuffer); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to allocate command buffer with error code: " + std::to_string(result));
+        }
+    }
+
+    void recordCommandBuffer(const uint32_t imageIndex)
+    {
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.pNext = nullptr;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+        beginInfo.pInheritanceInfo = nullptr;
+
+        if (const VkResult result = vkBeginCommandBuffer(commandBuffer, &beginInfo); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to begin recording command buffer with error code: " + std::to_string(result));
+        }
+
+        constexpr VkClearValue clearColor = {0.0f, 0.0f, 0.0f, 1.0f};
+
+        VkRenderPassBeginInfo renderPassBeginInfo{};
+        renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassBeginInfo.pNext = nullptr;
+        renderPassBeginInfo.renderPass = renderPass;
+        renderPassBeginInfo.framebuffer = swapchainFramebuffers[imageIndex];
+        renderPassBeginInfo.renderArea.offset = {0, 0};
+        renderPassBeginInfo.renderArea.extent = swapchainExtent;
+        renderPassBeginInfo.clearValueCount = 1;
+        renderPassBeginInfo.pClearValues = &clearColor;
+
+        vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+        const VkViewport viewport = getViewport(swapchainExtent);
+        vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+
+        const VkRect2D scissor = getScissor(swapchainExtent);
+        vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+
+        vkCmdEndRenderPass(commandBuffer);
+
+        if (const VkResult result = vkEndCommandBuffer(commandBuffer); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to record command buffer with error code: " + std::to_string(result));
         }
     }
 };
