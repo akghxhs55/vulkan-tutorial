@@ -231,17 +231,17 @@ bool isDeviceSuitable(const VkPhysicalDevice device, const VkSurfaceKHR surface)
 
     const bool extensionsSupported = checkDeviceExtensionSupport(device);
 
-    bool swapChainAdequate = false;
+    bool swapchainAdequate = false;
     if (extensionsSupported)
     {
-        const SwapChainSupportDetails swapChainDetails = querySwapChainSupport(device, surface);
-        swapChainAdequate = !swapChainDetails.formats.empty() and
-                            !swapChainDetails.presentModes.empty();
+        const SwapChainSupportDetails swapchainDetails = querySwapChainSupport(device, surface);
+        swapchainAdequate = !swapchainDetails.formats.empty() and
+                            !swapchainDetails.presentModes.empty();
     }
 
     return indices.isComplete() and
             extensionsSupported and
-            swapChainAdequate;
+            swapchainAdequate;
 }
 
 VkSurfaceFormatKHR getSwapChainSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
@@ -354,11 +354,12 @@ private:
     VkDevice device = nullptr;
     VkQueue graphicsQueue = nullptr;
     VkQueue presentQueue = nullptr;
-    VkSwapchainKHR swapChain = nullptr;
-    VkFormat swapChainImageFormat = VK_FORMAT_UNDEFINED;
-    VkExtent2D swapChainExtent = {};
-    std::vector<VkImage> swapChainImages;
-    std::vector<VkImageView> swapChainImageViews;
+    VkSwapchainKHR swapchain = nullptr;
+    VkFormat swapchainImageFormat = VK_FORMAT_UNDEFINED;
+    VkExtent2D swapchainExtent = {};
+    std::vector<VkImage> swapchainImages;
+    std::vector<VkImageView> swapchainImageViews;
+    VkRenderPass renderPass = nullptr;
     VkPipelineLayout pipelineLayout = nullptr;
 
     void initiateWindow()
@@ -382,8 +383,9 @@ private:
         setupPhysicalDevice();
         createDevice();
         setupQueues();
-        createSwapChain();
+        createSwapchain();
         createImageViews();
+        createRenderPass();
         createGraphicsPipeline();
     }
 
@@ -398,11 +400,12 @@ private:
     void cleanup() const
     {
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-        for (const auto imageView : swapChainImageViews)
+        vkDestroyRenderPass(device, renderPass, nullptr);
+        for (const auto imageView : swapchainImageViews)
         {
             vkDestroyImageView(device, imageView, nullptr);
         }
-        vkDestroySwapchainKHR(device, swapChain, nullptr);
+        vkDestroySwapchainKHR(device, swapchain, nullptr);
         vkDestroyDevice(device, nullptr);
         vkDestroySurfaceKHR(instance, surface, nullptr);
         if (enableValidationLayers)
@@ -559,20 +562,20 @@ private:
         vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
     }
 
-    void createSwapChain()
+    void createSwapchain()
     {
-        const SwapChainSupportDetails swapChainSupportDetails = querySwapChainSupport(physicalDevice, surface);
+        const SwapChainSupportDetails swapchainSupportDetails = querySwapChainSupport(physicalDevice, surface);
 
-        uint32_t minImageCount = swapChainSupportDetails.capabilities.minImageCount + 1;
-        if (swapChainSupportDetails.capabilities.maxImageCount > 0 and
-            swapChainSupportDetails.capabilities.maxImageCount < minImageCount)
+        uint32_t minImageCount = swapchainSupportDetails.capabilities.minImageCount + 1;
+        if (swapchainSupportDetails.capabilities.maxImageCount > 0 and
+            swapchainSupportDetails.capabilities.maxImageCount < minImageCount)
         {
-            minImageCount = swapChainSupportDetails.capabilities.maxImageCount;
+            minImageCount = swapchainSupportDetails.capabilities.maxImageCount;
         }
 
-        const VkSurfaceFormatKHR surfaceFormat = getSwapChainSurfaceFormat(swapChainSupportDetails.formats);
+        const VkSurfaceFormatKHR surfaceFormat = getSwapChainSurfaceFormat(swapchainSupportDetails.formats);
 
-        const VkExtent2D extent = getSwapChainExtent(swapChainSupportDetails.capabilities, window);
+        const VkExtent2D extent = getSwapChainExtent(swapchainSupportDetails.capabilities, window);
 
         VkSharingMode sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         const QueueFamilyIndices indices = findQueueFamilies(physicalDevice, surface);
@@ -583,7 +586,7 @@ private:
             queueFamilyIndices = {indices.graphicsFamily.value(), indices.presentFamily.value()};
         }
 
-        const VkPresentModeKHR presentMode = getSwapChainPresentMode(swapChainSupportDetails.presentModes);
+        const VkPresentModeKHR presentMode = getSwapChainPresentMode(swapchainSupportDetails.presentModes);
 
         VkSwapchainCreateInfoKHR createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -599,33 +602,33 @@ private:
         createInfo.imageSharingMode = sharingMode;
         createInfo.queueFamilyIndexCount = static_cast<uint32_t>(queueFamilyIndices.size());
         createInfo.pQueueFamilyIndices = queueFamilyIndices.data();
-        createInfo.preTransform = swapChainSupportDetails.capabilities.currentTransform;
+        createInfo.preTransform = swapchainSupportDetails.capabilities.currentTransform;
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         createInfo.presentMode = presentMode;
         createInfo.clipped = VK_TRUE;
         createInfo.oldSwapchain = nullptr;
 
-        if (const VkResult result = vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain); result != VK_SUCCESS)
+        if (const VkResult result = vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapchain); result != VK_SUCCESS)
         {
             throw std::runtime_error("Failed to create swap chain with error code: " + std::to_string(result));
         }
 
-        swapChainImageFormat = surfaceFormat.format;
+        swapchainImageFormat = surfaceFormat.format;
 
-        swapChainExtent = extent;
+        swapchainExtent = extent;
 
         uint32_t imageCount = 0;
-        vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
-        swapChainImages.resize(imageCount);
-        vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
+        vkGetSwapchainImagesKHR(device, swapchain, &imageCount, nullptr);
+        swapchainImages.resize(imageCount);
+        vkGetSwapchainImagesKHR(device, swapchain, &imageCount, swapchainImages.data());
 
     }
 
     void createImageViews()
     {
-        swapChainImageViews.resize(swapChainImages.size());
+        swapchainImageViews.resize(swapchainImages.size());
 
-        for (size_t i = 0; i < swapChainImages.size(); i++)
+        for (size_t i = 0; i < swapchainImages.size(); i++)
         {
             VkComponentMapping components{};
             components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -644,16 +647,62 @@ private:
             createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             createInfo.pNext = nullptr;
             createInfo.flags = 0;
-            createInfo.image = swapChainImages[i];
+            createInfo.image = swapchainImages[i];
             createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            createInfo.format = swapChainImageFormat;
+            createInfo.format = swapchainImageFormat;
             createInfo.components = components;
             createInfo.subresourceRange = subresourceRange;
 
-            if (const VkResult result = vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]); result != VK_SUCCESS)
+            if (const VkResult result = vkCreateImageView(device, &createInfo, nullptr, &swapchainImageViews[i]); result != VK_SUCCESS)
             {
                 throw std::runtime_error("Failed to create image views with error code: " + std::to_string(result));
             }
+        }
+    }
+
+    void createRenderPass()
+    {
+        VkAttachmentDescription colorAttachmentDescription{};
+        colorAttachmentDescription.flags = 0;
+        colorAttachmentDescription.format = swapchainImageFormat;
+        colorAttachmentDescription.samples = VK_SAMPLE_COUNT_1_BIT;
+        colorAttachmentDescription.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachmentDescription.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachmentDescription.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachmentDescription.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachmentDescription.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachmentDescription.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+        VkAttachmentReference colorAttachmentReference{};
+        colorAttachmentReference.attachment = 0;
+        colorAttachmentReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpassDescription{};
+        subpassDescription.flags = 0;
+        subpassDescription.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpassDescription.inputAttachmentCount = 0;
+        subpassDescription.pInputAttachments = nullptr;
+        subpassDescription.colorAttachmentCount = 1;
+        subpassDescription.pColorAttachments = &colorAttachmentReference;
+        subpassDescription.pResolveAttachments = nullptr;
+        subpassDescription.pDepthStencilAttachment = nullptr;
+        subpassDescription.preserveAttachmentCount = 0;
+        subpassDescription.pPreserveAttachments = nullptr;
+
+        VkRenderPassCreateInfo renderPassCreateInfo{};
+        renderPassCreateInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        renderPassCreateInfo.pNext = nullptr;
+        renderPassCreateInfo.flags = 0;
+        renderPassCreateInfo.attachmentCount = 1;
+        renderPassCreateInfo.pAttachments = &colorAttachmentDescription;
+        renderPassCreateInfo.subpassCount = 1;
+        renderPassCreateInfo.pSubpasses = &subpassDescription;
+        renderPassCreateInfo.dependencyCount = 0;
+        renderPassCreateInfo.pDependencies = nullptr;
+
+        if (const VkResult result = vkCreateRenderPass(device, &renderPassCreateInfo, nullptr, &renderPass); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create render pass with error code: " + std::to_string(result));
         }
     }
 
@@ -718,14 +767,14 @@ private:
         VkViewport viewport{};
         viewport.x = 0.0f;
         viewport.y = 0.0f;
-        viewport.width = static_cast<float>(swapChainExtent.width);
-        viewport.height = static_cast<float>(swapChainExtent.height);
+        viewport.width = static_cast<float>(swapchainExtent.width);
+        viewport.height = static_cast<float>(swapchainExtent.height);
         viewport.minDepth = 0.0f;
         viewport.maxDepth = 1.0f;
 
         VkRect2D scissor{};
         scissor.offset = {0, 0};
-        scissor.extent = swapChainExtent;
+        scissor.extent = swapchainExtent;
 
         VkPipelineViewportStateCreateInfo viewportStateCreateInfo{};
         viewportStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
