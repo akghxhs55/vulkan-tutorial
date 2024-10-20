@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <cstdlib>
 #include <optional>
+#include <set>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
@@ -129,41 +130,14 @@ void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT &create
 struct QueueFamilyIndices
 {
     std::optional<uint32_t> graphicsFamily;
+    std::optional<uint32_t> presentFamily;
 
     bool isComplete() const
     {
-        return graphicsFamily.has_value();
+        return graphicsFamily.has_value() and
+                presentFamily.has_value();
     }
 };
-
-QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device)
-{
-    QueueFamilyIndices indices;
-
-    uint32_t queueFamilyCount = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
-
-    std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
-
-    for (uint32_t i = 0; i < queueFamilyCount; ++i)
-    {
-        if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
-        {
-            indices.graphicsFamily.emplace(i);
-            break;
-        }
-    }
-
-    return indices;
-}
-
-bool isDeviceSuitable(VkPhysicalDevice_T * device)
-{
-    const QueueFamilyIndices indices = findQueueFamilies(device);
-
-    return indices.isComplete();
-}
 
 
 class HelloTriangleApplication
@@ -181,9 +155,11 @@ private:
     GLFWwindow* window = nullptr;
     VkInstance instance = nullptr;
     VkDebugUtilsMessengerEXT debugMessenger = nullptr;
+    VkSurfaceKHR surface = nullptr;
     VkPhysicalDevice physicalDevice = nullptr;
     VkDevice device = nullptr;
     VkQueue graphicsQueue = nullptr;
+    VkQueue presentQueue = nullptr;
 
     void initiateWindow()
     {
@@ -202,9 +178,10 @@ private:
         {
             createDebugMessenger();
         }
+        createSurface();
         setupPhysicalDevice();
         createLogicalDevice();
-        setupLogicalQueue();
+        setupLogicalQueues();
     }
 
     void mainLoop() const
@@ -218,6 +195,7 @@ private:
     void cleanup() const
     {
         vkDestroyDevice(device, nullptr);
+        vkDestroySurfaceKHR(instance, surface, nullptr);
         if (enableValidationLayers)
         {
             destroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
@@ -288,6 +266,14 @@ private:
         }
     }
 
+    void createSurface()
+    {
+        if (const VkResult result = glfwCreateWindowSurface(instance, window, nullptr, &surface); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create window surface with error code: " + std::to_string(result));
+        }
+    }
+
     void setupPhysicalDevice()
     {
         uint32_t deviceCount = 0;
@@ -319,15 +305,24 @@ private:
     {
         const QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 
+        std::set<uint32_t> uniqueQueueFamilies = {
+            indices.graphicsFamily.value(),
+            indices.presentFamily.value()};
         constexpr float queuePriority = 1.0f;
 
-        VkDeviceQueueCreateInfo queueCreateInfo{};
-        queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queueCreateInfo.pNext = nullptr;
-        queueCreateInfo.flags = 0;
-        queueCreateInfo.queueFamilyIndex = indices.graphicsFamily.value();
-        queueCreateInfo.queueCount = 1;
-        queueCreateInfo.pQueuePriorities = &queuePriority;
+        std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+        for (uint32_t queueFamily : uniqueQueueFamilies)
+        {
+            VkDeviceQueueCreateInfo queueCreateInfo{};
+            queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            queueCreateInfo.pNext = nullptr;
+            queueCreateInfo.flags = 0;
+            queueCreateInfo.queueFamilyIndex = queueFamily;
+            queueCreateInfo.queueCount = 1;
+            queueCreateInfo.pQueuePriorities = &queuePriority;
+
+            queueCreateInfos.emplace_back(queueCreateInfo);
+        }
 
         std::vector<const char*> extensions;
         extensions.emplace_back("VK_KHR_portability_subset");
@@ -338,8 +333,8 @@ private:
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         createInfo.pNext = nullptr;
         createInfo.flags = 0;
-        createInfo.queueCreateInfoCount = 1;
-        createInfo.pQueueCreateInfos = &queueCreateInfo;
+        createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
+        createInfo.pQueueCreateInfos = queueCreateInfos.data();
         createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         createInfo.ppEnabledExtensionNames = extensions.data();
         createInfo.pEnabledFeatures = &features;
@@ -350,11 +345,48 @@ private:
         }
     }
 
-    void setupLogicalQueue()
+    void setupLogicalQueues()
     {
         const QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 
         vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+        vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
+    }
+
+    QueueFamilyIndices findQueueFamilies(const VkPhysicalDevice device) const
+    {
+        QueueFamilyIndices indices;
+
+        uint32_t queueFamilyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+
+        std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
+
+        for (uint32_t i = 0; i < queueFamilyCount; ++i)
+        {
+            if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+            {
+                indices.graphicsFamily.emplace(i);
+            }
+
+            VkBool32 presentSupport = false;
+            vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
+
+            if (presentSupport)
+            {
+                indices.presentFamily.emplace(i);
+            }
+        }
+
+        return indices;
+    }
+
+    bool isDeviceSuitable(const VkPhysicalDevice device) const
+    {
+        const QueueFamilyIndices indices = findQueueFamilies(device);
+
+        return indices.isComplete();
     }
 };
 
