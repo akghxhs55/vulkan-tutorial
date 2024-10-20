@@ -362,6 +362,7 @@ private:
     VkRenderPass renderPass = nullptr;
     VkPipelineLayout pipelineLayout = nullptr;
     VkPipeline graphicsPipeline = nullptr;
+    std::vector<VkFramebuffer> swapchainFramebuffers;
 
     void initiateWindow()
     {
@@ -388,6 +389,7 @@ private:
         createImageViews();
         createRenderPass();
         createGraphicsPipeline();
+        createFramebuffers();
     }
 
     void mainLoop() const
@@ -400,6 +402,10 @@ private:
 
     void cleanup() const
     {
+        for (const auto framebuffer : swapchainFramebuffers)
+        {
+            vkDestroyFramebuffer(device, framebuffer, nullptr);
+        }
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);
@@ -881,6 +887,34 @@ private:
 
         vkDestroyShaderModule(device, fragmentShaderModule, nullptr);
         vkDestroyShaderModule(device, vertexShaderModule, nullptr);
+    }
+
+    void createFramebuffers()
+    {
+        swapchainFramebuffers.resize(swapchainImageViews.size());
+
+        for (size_t i = 0; i < swapchainImageViews.size(); i++)
+        {
+            std::vector<VkImageView> attachments = {
+                swapchainImageViews[i]
+            };
+
+            VkFramebufferCreateInfo framebufferCreateInfo{};
+            framebufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            framebufferCreateInfo.pNext = nullptr;
+            framebufferCreateInfo.flags = 0;
+            framebufferCreateInfo.renderPass = renderPass;
+            framebufferCreateInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+            framebufferCreateInfo.pAttachments = attachments.data();
+            framebufferCreateInfo.width = swapchainExtent.width;
+            framebufferCreateInfo.height = swapchainExtent.height;
+            framebufferCreateInfo.layers = 1;
+
+            if (const VkResult result = vkCreateFramebuffer(device, &framebufferCreateInfo, nullptr, &swapchainFramebuffers[i]); result != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to create framebuffer with error code: " + std::to_string(result));
+            }
+        }
     }
 };
 
