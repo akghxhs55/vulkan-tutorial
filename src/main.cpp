@@ -396,10 +396,27 @@ struct Vertex
 };
 
 const std::vector<Vertex> vertices = {
-    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
     {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
     {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
 };
+
+uint32_t findMemoryType(const uint32_t typeFilter, const VkMemoryPropertyFlags properties, const VkPhysicalDevice physicalDevice)
+{
+    VkPhysicalDeviceMemoryProperties memoryProperties;
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+
+    for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++)
+    {
+        if ((typeFilter & (1 << i)) and
+            (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties)
+        {
+            return i;
+        }
+    }
+
+    throw std::runtime_error("Failed to find suitable memory type.");
+}
 
 
 class HelloTriangleApplication
@@ -432,6 +449,8 @@ private:
     VkPipeline graphicsPipeline = nullptr;
     std::vector<VkFramebuffer> swapchainFramebuffers;
     VkCommandPool commandPool = nullptr;
+    VkBuffer vertexBuffer = nullptr;
+    VkDeviceMemory vertexBufferMemory = nullptr;
     std::vector<VkCommandBuffer> commandBuffers;
     std::vector<VkSemaphore> imageAvailableSemaphores;
     std::vector<VkSemaphore> renderFinishedSemaphores;
@@ -467,6 +486,8 @@ private:
         createGraphicsPipeline();
         createFramebuffers();
         createCommandPool();
+        createVertexBuffer();
+        bindBuffer();
         createCommandBuffer();
         createSyncObjects();
     }
@@ -496,6 +517,8 @@ private:
         {
             vkDestroySemaphore(device, semaphore, nullptr);
         }
+        vkDestroyBuffer(device, vertexBuffer, nullptr);
+        vkFreeMemory(device, vertexBufferMemory, nullptr);
         vkDestroyCommandPool(device, commandPool, nullptr);
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -1008,6 +1031,49 @@ private:
         }
     }
 
+    void createVertexBuffer()
+    {
+        VkBufferCreateInfo bufferCreateInfo{};
+        bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferCreateInfo.pNext = nullptr;
+        bufferCreateInfo.flags = 0;
+        bufferCreateInfo.size = sizeof(vertices[0]) * vertices.size();
+        bufferCreateInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        bufferCreateInfo.queueFamilyIndexCount = 0;
+        bufferCreateInfo.pQueueFamilyIndices = nullptr;
+
+        if (const VkResult result = vkCreateBuffer(device, &bufferCreateInfo, nullptr, &vertexBuffer); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create vertex buffer with error code: " + std::to_string(result));
+        }
+    }
+
+    void bindBuffer()
+    {
+        VkMemoryRequirements memoryRequirements;
+        vkGetBufferMemoryRequirements(device, vertexBuffer, &memoryRequirements);
+
+        VkMemoryAllocateInfo allocateInfo{};
+        allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocateInfo.pNext = nullptr;
+        allocateInfo.allocationSize = memoryRequirements.size;
+        allocateInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, physicalDevice);
+
+        if (const VkResult result = vkAllocateMemory(device, &allocateInfo, nullptr, &vertexBufferMemory); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to allocate vertex buffer memory with error code: " + std::to_string(result));
+        }
+
+        vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+
+        void *data;
+        vkMapMemory(device, vertexBufferMemory, 0, sizeof(vertices[0]) * vertices.size(), 0, &data);
+        memcpy(data, vertices.data(), sizeof(vertices[0]) * vertices.size());
+
+        vkUnmapMemory(device, vertexBufferMemory);
+    }
+
     void createCommandPool()
     {
         const QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice, surface);
@@ -1184,7 +1250,11 @@ private:
         const VkRect2D scissor = getScissor(swapchainExtent);
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        const std::vector<VkBuffer> vertexBuffers = {vertexBuffer};
+        constexpr VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers.data(), offsets);
+
+        vkCmdDraw(commandBuffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 
         vkCmdEndRenderPass(commandBuffer);
 
