@@ -395,15 +395,17 @@ private:
     std::vector<VkSemaphore> renderFinishedSemaphores;
     std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0;
+    bool framebufferResized = false;
 
     void initiateWindow()
     {
         glfwInit();
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
         window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+        glfwSetWindowUserPointer(window, this);
+        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
     }
 
     void initiateVulkan()
@@ -453,18 +455,10 @@ private:
             vkDestroySemaphore(device, semaphore, nullptr);
         }
         vkDestroyCommandPool(device, commandPool, nullptr);
-        for (const auto framebuffer : swapchainFramebuffers)
-        {
-            vkDestroyFramebuffer(device, framebuffer, nullptr);
-        }
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);
-        for (const auto imageView : swapchainImageViews)
-        {
-            vkDestroyImageView(device, imageView, nullptr);
-        }
-        vkDestroySwapchainKHR(device, swapchain, nullptr);
+        cleanupSwapchain();
         vkDestroyDevice(device, nullptr);
         vkDestroySurfaceKHR(instance, surface, nullptr);
         if (enableValidationLayers)
@@ -1045,13 +1039,21 @@ private:
     void drawFrame()
     {
         vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, std::numeric_limits<uint64_t>::max());
-        vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
         uint32_t imageIndex;
-        if (const VkResult result = vkAcquireNextImageKHR(device, swapchain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex); result != VK_SUCCESS)
+        const VkResult acquireResult = vkAcquireNextImageKHR(device, swapchain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR)
         {
-            throw std::runtime_error("Failed to acquire next image with error code: " + std::to_string(result));
+            recreateSwapchain();
+            return;
         }
+        else if (acquireResult != VK_SUCCESS and
+                acquireResult != VK_SUBOPTIMAL_KHR)
+        {
+            throw std::runtime_error("Failed to acquire next image with error code: " + std::to_string(acquireResult));
+        }
+
+        vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
         vkResetCommandBuffer(commandBuffers[currentFrame], 0);
         recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -1086,9 +1088,17 @@ private:
         presentInfo.pImageIndices = &imageIndex;
         presentInfo.pResults = nullptr;
 
-        if (const VkResult result = vkQueuePresentKHR(presentQueue, &presentInfo); result != VK_SUCCESS)
+        const VkResult presentResult = vkQueuePresentKHR(presentQueue, &presentInfo);
+        if (presentResult == VK_ERROR_OUT_OF_DATE_KHR or
+            presentResult == VK_SUBOPTIMAL_KHR or
+            framebufferResized)
         {
-            throw std::runtime_error("Failed to present image with error code: " + std::to_string(result));
+            framebufferResized = false;
+            recreateSwapchain();
+        }
+        else if (presentResult != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to present image with error code: " + std::to_string(presentResult));
         }
 
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -1137,6 +1147,42 @@ private:
         {
             throw std::runtime_error("Failed to record command buffer with error code: " + std::to_string(result));
         }
+    }
+
+    void recreateSwapchain()
+    {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        while (width == 0 or height == 0)
+        {
+            glfwGetFramebufferSize(window, &width, &height);
+            glfwWaitEvents();
+        }
+
+        vkDeviceWaitIdle(device);
+
+        createSwapchain();
+        createImageViews();
+        createFramebuffers();
+    }
+
+    void cleanupSwapchain() const
+    {
+        for (const auto framebuffer : swapchainFramebuffers)
+        {
+            vkDestroyFramebuffer(device, framebuffer, nullptr);
+        }
+        for (const auto imageView : swapchainImageViews)
+        {
+            vkDestroyImageView(device, imageView, nullptr);
+        }
+        vkDestroySwapchainKHR(device, swapchain, nullptr);
+    }
+
+    static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
+    {
+        const auto app = static_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        app->framebufferResized = true;
     }
 };
 
