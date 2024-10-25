@@ -1,7 +1,9 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#define GLM_FORCE_RADIANS
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <iostream>
 #include <stdexcept>
@@ -10,6 +12,7 @@
 #include <set>
 #include <fstream>
 #include <array>
+#include <chrono>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
@@ -402,7 +405,7 @@ const std::vector<Vertex> vertices = {
     {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
 };
 
-const std::vector<uint16_t> indicies = {
+const std::vector<uint16_t> indices = {
     0, 1, 2, 2, 3, 0
 };
 
@@ -422,6 +425,13 @@ uint32_t findMemoryType(const uint32_t typeFilter, const VkMemoryPropertyFlags p
 
     throw std::runtime_error("Failed to find suitable memory type.");
 }
+
+struct UniformBufferObject
+{
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 proj;
+};
 
 
 class HelloTriangleApplication
@@ -450,6 +460,7 @@ private:
     std::vector<VkImage> swapchainImages;
     std::vector<VkImageView> swapchainImageViews;
     VkRenderPass renderPass = nullptr;
+    VkDescriptorSetLayout descriptorSetLayout = nullptr;
     VkPipelineLayout pipelineLayout = nullptr;
     VkPipeline graphicsPipeline = nullptr;
     std::vector<VkFramebuffer> swapchainFramebuffers;
@@ -458,6 +469,9 @@ private:
     VkDeviceMemory vertexBufferMemory = nullptr;
     VkBuffer indexBuffer =  nullptr;
     VkDeviceMemory indexBufferMemory = nullptr;
+    std::vector<VkBuffer> uniformBuffers;
+    std::vector<VkDeviceMemory> uniformBuffersMemory;
+    std::vector<void*> uniformBuffersData;
     std::vector<VkCommandBuffer> commandBuffers;
     std::vector<VkSemaphore> imageAvailableSemaphores;
     std::vector<VkSemaphore> renderFinishedSemaphores;
@@ -490,11 +504,13 @@ private:
         createSwapchain();
         createImageViews();
         createRenderPass();
+        createDescriptorSetLayout();
         createGraphicsPipeline();
         createFramebuffers();
         createCommandPool();
         createVertexBuffer();
         createIndexBuffer();
+        createUniformBuffers();
         createCommandBuffer();
         createSyncObjects();
     }
@@ -512,6 +528,19 @@ private:
 
     void cleanup() const
     {
+        cleanupSwapchain();
+
+        for (const auto uniformBuffer : uniformBuffers)
+        {
+            vkDestroyBuffer(device, uniformBuffer, nullptr);
+        }
+        for (const auto uniformBufferMemory : uniformBuffersMemory)
+        {
+            vkFreeMemory(device, uniformBufferMemory, nullptr);
+        }
+
+        vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+
         for (const auto fence : inFlightFences)
         {
             vkDestroyFence(device, fence, nullptr);
@@ -537,8 +566,6 @@ private:
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 
         vkDestroyRenderPass(device, renderPass, nullptr);
-
-        cleanupSwapchain();
 
         vkDestroyDevice(device, nullptr);
 
@@ -852,6 +879,28 @@ private:
         }
     }
 
+    void createDescriptorSetLayout()
+    {
+        VkDescriptorSetLayoutBinding uboLayoutBinding{};
+        uboLayoutBinding.binding = 0;
+        uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboLayoutBinding.descriptorCount = 1;
+        uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        uboLayoutBinding.pImmutableSamplers = nullptr;
+
+        VkDescriptorSetLayoutCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        createInfo.pNext = nullptr;
+        createInfo.flags = 0;
+        createInfo.bindingCount = 1;
+        createInfo.pBindings = &uboLayoutBinding;
+
+        if (const VkResult result = vkCreateDescriptorSetLayout(device, &createInfo, nullptr, &descriptorSetLayout); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create descriptor set layout with error code: " + std::to_string(result));
+        }
+    }
+
     void createGraphicsPipeline()
     {
         const std::vector<char> vertexShaderCode = readFile("../shaders/vertex.spv");
@@ -982,8 +1031,8 @@ private:
         pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pipelineLayoutCreateInfo.pNext = nullptr;
         pipelineLayoutCreateInfo.flags = 0;
-        pipelineLayoutCreateInfo.setLayoutCount = 0;
-        pipelineLayoutCreateInfo.pSetLayouts = nullptr;
+        pipelineLayoutCreateInfo.setLayoutCount = 1;
+        pipelineLayoutCreateInfo.pSetLayouts = &descriptorSetLayout;
         pipelineLayoutCreateInfo.pushConstantRangeCount = 0;
         pipelineLayoutCreateInfo.pPushConstantRanges = nullptr;
 
@@ -992,28 +1041,28 @@ private:
             throw std::runtime_error("Failed to create pipeline layout with error code: " + std::to_string(result));
         }
 
-        VkGraphicsPipelineCreateInfo pipelineCreateInfo{};
-        pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipelineCreateInfo.pNext = nullptr;
-        pipelineCreateInfo.flags = 0;
-        pipelineCreateInfo.stageCount = static_cast<uint32_t>(shaderStageCreateInfos.size());
-        pipelineCreateInfo.pStages = shaderStageCreateInfos.data();
-        pipelineCreateInfo.pVertexInputState = &vertexInputStateCreateInfo;
-        pipelineCreateInfo.pInputAssemblyState = &inputAssemblyStateCreateInfo;
-        pipelineCreateInfo.pTessellationState = nullptr;
-        pipelineCreateInfo.pViewportState = &viewportStateCreateInfo;
-        pipelineCreateInfo.pRasterizationState = &rasterizationStateCreateInfo;
-        pipelineCreateInfo.pMultisampleState = &multisampleStateCreateInfo;
-        pipelineCreateInfo.pDepthStencilState = nullptr;
-        pipelineCreateInfo.pColorBlendState = &colorBlendStateCreateInfo;
-        pipelineCreateInfo.pDynamicState = &dynamicStateCreateInfo;
-        pipelineCreateInfo.layout = pipelineLayout;
-        pipelineCreateInfo.renderPass = renderPass;
-        pipelineCreateInfo.subpass = 0;
-        pipelineCreateInfo.basePipelineHandle = nullptr;
-        pipelineCreateInfo.basePipelineIndex = -1;
+        VkGraphicsPipelineCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        createInfo.pNext = nullptr;
+        createInfo.flags = 0;
+        createInfo.stageCount = static_cast<uint32_t>(shaderStageCreateInfos.size());
+        createInfo.pStages = shaderStageCreateInfos.data();
+        createInfo.pVertexInputState = &vertexInputStateCreateInfo;
+        createInfo.pInputAssemblyState = &inputAssemblyStateCreateInfo;
+        createInfo.pTessellationState = nullptr;
+        createInfo.pViewportState = &viewportStateCreateInfo;
+        createInfo.pRasterizationState = &rasterizationStateCreateInfo;
+        createInfo.pMultisampleState = &multisampleStateCreateInfo;
+        createInfo.pDepthStencilState = nullptr;
+        createInfo.pColorBlendState = &colorBlendStateCreateInfo;
+        createInfo.pDynamicState = &dynamicStateCreateInfo;
+        createInfo.layout = pipelineLayout;
+        createInfo.renderPass = renderPass;
+        createInfo.subpass = 0;
+        createInfo.basePipelineHandle = nullptr;
+        createInfo.basePipelineIndex = -1;
 
-        if (const VkResult result = vkCreateGraphicsPipelines(device, nullptr, 1, &pipelineCreateInfo, nullptr, &graphicsPipeline); result != VK_SUCCESS)
+        if (const VkResult result = vkCreateGraphicsPipelines(device, nullptr, 1, &createInfo, nullptr, &graphicsPipeline); result != VK_SUCCESS)
         {
             throw std::runtime_error("Failed to create graphics pipeline with error code: " + std::to_string(result));
         }
@@ -1076,7 +1125,7 @@ private:
 
     void createIndexBuffer()
     {
-        const VkDeviceSize bufferSize = sizeof(indicies[0]) * indicies.size();
+        const VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingBufferMemory;
@@ -1086,7 +1135,7 @@ private:
 
         void *data;
         vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        memcpy(data, indicies.data(), bufferSize);
+        memcpy(data, indices.data(), bufferSize);
         vkUnmapMemory(device, stagingBufferMemory);
 
         createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
@@ -1096,6 +1145,24 @@ private:
 
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
+    }
+
+    void createUniformBuffers()
+    {
+        uniformBuffers.resize(swapchainImages.size());
+        uniformBuffersMemory.resize(swapchainImages.size());
+        uniformBuffersData.resize(swapchainImages.size());
+
+        for (size_t i = 0; i < swapchainImages.size(); i++)
+        {
+            constexpr VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+            createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, uniformBuffers[i],
+                         uniformBuffersMemory[i]);
+
+            vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersData[i]);
+        }
     }
 
     void createCommandPool()
@@ -1193,6 +1260,8 @@ private:
         vkResetCommandBuffer(commandBuffers[currentFrame], 0);
         recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
+        updateUniformBuffer(currentFrame);
+
         const std::vector<VkSemaphore> waitSemaphores = {imageAvailableSemaphores[currentFrame]};
         const std::vector<VkPipelineStageFlags> waitStages = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
         const std::vector<VkSemaphore> signalSemaphores = {renderFinishedSemaphores[currentFrame]};
@@ -1280,7 +1349,7 @@ private:
 
         vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
-        vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indicies.size()), 1, 0, 0, 0);
+        vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
         vkCmdEndRenderPass(commandBuffer);
 
@@ -1407,6 +1476,24 @@ private:
         vkQueueWaitIdle(graphicsQueue);
 
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    }
+
+    void updateUniformBuffer(const uint32_t currentImage) const
+    {
+        static auto startTime = std::chrono::high_resolution_clock::now();
+
+        const auto currentTime = std::chrono::high_resolution_clock::now();
+        const float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+        UniformBufferObject ubo{};
+        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.proj = glm::perspective(glm::radians(45.0f),
+                                    static_cast<float>(swapchainExtent.width) /
+                                    static_cast<float>(swapchainExtent.height), 0.1f, 10.0f);
+        ubo.proj[1][1] *= -1;
+
+        memcpy(uniformBuffersData[currentImage], &ubo, sizeof(ubo));
     }
 };
 
