@@ -250,9 +250,13 @@ bool isDeviceSuitable(const VkPhysicalDevice device, const VkSurfaceKHR surface)
                             !swapchainDetails.presentModes.empty();
     }
 
+    VkPhysicalDeviceFeatures supportedFeatures;
+    vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
+
     return indices.isComplete() and
             extensionsSupported and
-            swapchainAdequate;
+            swapchainAdequate and
+            supportedFeatures.samplerAnisotropy;
 }
 
 VkSurfaceFormatKHR getSwapChainSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
@@ -470,6 +474,8 @@ private:
     VkCommandPool commandPool = nullptr;
     VkImage textureImage = nullptr;
     VkDeviceMemory textureImageMemory = nullptr;
+    VkImageView textureImageView = nullptr;
+    VkSampler textureSampler = nullptr;
     VkBuffer vertexBuffer = nullptr;
     VkDeviceMemory vertexBufferMemory = nullptr;
     VkBuffer indexBuffer =  nullptr;
@@ -516,6 +522,8 @@ private:
         createFramebuffers();
         createCommandPool();
         createTextureImage();
+        createTextureImageView();
+        createTextureSampler();
         createVertexBuffer();
         createIndexBuffer();
         createUniformBuffers();
@@ -539,6 +547,9 @@ private:
     void cleanup() const
     {
         cleanupSwapchain();
+
+        vkDestroySampler(device, textureSampler, nullptr);
+        vkDestroyImageView(device, textureImageView, nullptr);
 
         vkDestroyImage(device, textureImage, nullptr);
         vkFreeMemory(device, textureImageMemory, nullptr);
@@ -715,7 +726,8 @@ private:
             queueCreateInfos.emplace_back(queueCreateInfo);
         }
 
-        constexpr VkPhysicalDeviceFeatures features{};
+        VkPhysicalDeviceFeatures features{};
+        features.samplerAnisotropy = VK_TRUE;
 
         VkDeviceCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -806,36 +818,9 @@ private:
     void createImageViews()
     {
         swapchainImageViews.resize(swapchainImages.size());
-
-        for (size_t i = 0; i < swapchainImages.size(); i++)
+        for (uint32_t i = 0; i < swapchainImages.size(); i++)
         {
-            VkComponentMapping components{};
-            components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-            components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-            components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-            components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-
-            VkImageSubresourceRange subresourceRange{};
-            subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            subresourceRange.baseMipLevel = 0;
-            subresourceRange.levelCount = 1;
-            subresourceRange.baseArrayLayer = 0;
-            subresourceRange.layerCount = 1;
-
-            VkImageViewCreateInfo createInfo{};
-            createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            createInfo.pNext = nullptr;
-            createInfo.flags = 0;
-            createInfo.image = swapchainImages[i];
-            createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            createInfo.format = swapchainImageFormat;
-            createInfo.components = components;
-            createInfo.subresourceRange = subresourceRange;
-
-            if (const VkResult result = vkCreateImageView(device, &createInfo, nullptr, &swapchainImageViews[i]); result != VK_SUCCESS)
-            {
-                throw std::runtime_error("Failed to create image views with error code: " + std::to_string(result));
-            }
+            swapchainImageViews[i] = createImageView(swapchainImages[i], swapchainImageFormat);
         }
     }
 
@@ -1164,6 +1149,42 @@ private:
 
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
+    }
+
+    void createTextureImageView()
+    {
+        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB);
+    }
+
+    void createTextureSampler()
+    {
+        VkPhysicalDeviceProperties properties;
+        vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+
+        VkSamplerCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        createInfo.pNext = nullptr;
+        createInfo.flags = 0;
+        createInfo.magFilter = VK_FILTER_LINEAR;
+        createInfo.minFilter = VK_FILTER_LINEAR;
+        createInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        createInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        createInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        createInfo.anisotropyEnable = VK_TRUE;
+        createInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+        createInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+        createInfo.unnormalizedCoordinates = VK_FALSE;
+        createInfo.compareEnable = VK_FALSE;
+        createInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+        createInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        createInfo.mipLodBias = 0.0f;
+        createInfo.minLod = 0.0f;
+        createInfo.maxLod = 0.0f;
+
+        if (const VkResult result = vkCreateSampler(device, &createInfo, nullptr, &textureSampler); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create texture sampler with error code: " + std::to_string(result));
+        }
     }
 
     void createVertexBuffer()
@@ -1738,6 +1759,34 @@ private:
         vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
         endSingleTimeCommands(commandBuffer);
+    }
+
+    VkImageView createImageView(const VkImage image, const VkFormat format) const
+    {
+        VkImageViewCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        createInfo.pNext = nullptr;
+        createInfo.flags = 0;
+        createInfo.image = image;
+        createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        createInfo.format = format;
+        createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+        createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        createInfo.subresourceRange.baseMipLevel = 0;
+        createInfo.subresourceRange.levelCount = 1;
+        createInfo.subresourceRange.baseArrayLayer = 0;
+        createInfo.subresourceRange.layerCount = 1;
+
+        VkImageView imageView;
+        if (const VkResult result = vkCreateImageView(device, &createInfo, nullptr, &imageView); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create texture image view with error code: " + std::to_string(result));
+        }
+
+        return imageView;
     }
 };
 
