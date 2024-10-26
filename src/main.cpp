@@ -428,9 +428,9 @@ uint32_t findMemoryType(const uint32_t typeFilter, const VkMemoryPropertyFlags p
 
 struct UniformBufferObject
 {
-    glm::mat4 model;
-    glm::mat4 view;
-    glm::mat4 proj;
+    alignas(16) glm::mat4 model;
+    alignas(16) glm::mat4 view;
+    alignas(16) glm::mat4 proj;
 };
 
 
@@ -472,6 +472,8 @@ private:
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     std::vector<void*> uniformBuffersData;
+    VkDescriptorPool descriptorPool = nullptr;
+    std::vector<VkDescriptorSet> descriptorSets;
     std::vector<VkCommandBuffer> commandBuffers;
     std::vector<VkSemaphore> imageAvailableSemaphores;
     std::vector<VkSemaphore> renderFinishedSemaphores;
@@ -511,6 +513,8 @@ private:
         createVertexBuffer();
         createIndexBuffer();
         createUniformBuffers();
+        createDescriptorPool();
+        setupDescriptorSets();
         createCommandBuffer();
         createSyncObjects();
     }
@@ -538,6 +542,8 @@ private:
         {
             vkFreeMemory(device, uniformBufferMemory, nullptr);
         }
+
+        vkDestroyDescriptorPool(device, descriptorPool, nullptr);
 
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 
@@ -971,7 +977,7 @@ private:
         rasterizationStateCreateInfo.rasterizerDiscardEnable = VK_FALSE;
         rasterizationStateCreateInfo.polygonMode = VK_POLYGON_MODE_FILL;
         rasterizationStateCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT;
-        rasterizationStateCreateInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        rasterizationStateCreateInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rasterizationStateCreateInfo.depthBiasEnable = VK_FALSE;
         rasterizationStateCreateInfo.depthBiasConstantFactor = 0.0f;
         rasterizationStateCreateInfo.depthBiasClamp = 0.0f;
@@ -1165,6 +1171,66 @@ private:
         }
     }
 
+    void createDescriptorPool()
+    {
+        VkDescriptorPoolSize poolSize{};
+        poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSize.descriptorCount = static_cast<uint32_t>(swapchainImages.size());
+
+        VkDescriptorPoolCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        createInfo.pNext = nullptr;
+        createInfo.flags = 0;
+        createInfo.maxSets = static_cast<uint32_t>(swapchainImages.size());
+        createInfo.poolSizeCount = 1;
+        createInfo.pPoolSizes = &poolSize;
+
+        if (const VkResult result = vkCreateDescriptorPool(device, &createInfo, nullptr, &descriptorPool); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create descriptor pool with error code: " + std::to_string(result));
+        }
+    }
+
+    void setupDescriptorSets()
+    {
+        const std::vector<VkDescriptorSetLayout> layouts(swapchainImages.size(), descriptorSetLayout);
+
+        VkDescriptorSetAllocateInfo allocateInfo{};
+        allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocateInfo.pNext = nullptr;
+        allocateInfo.descriptorPool = descriptorPool;
+        allocateInfo.descriptorSetCount = static_cast<uint32_t>(swapchainImages.size());
+        allocateInfo.pSetLayouts = layouts.data();
+
+        descriptorSets.resize(swapchainImages.size());
+        if (const VkResult result = vkAllocateDescriptorSets(device, &allocateInfo, descriptorSets.data()); result != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to allocate descriptor sets with error code: " + std::to_string(result));
+        }
+
+        for (size_t i = 0; i < swapchainImages.size(); i++)
+        {
+            VkDescriptorBufferInfo bufferInfo{};
+            bufferInfo.buffer = uniformBuffers[i];
+            bufferInfo.offset = 0;
+            bufferInfo.range = sizeof(UniformBufferObject);
+
+            VkWriteDescriptorSet descriptorWrite{};
+            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrite.pNext = nullptr;
+            descriptorWrite.dstSet = descriptorSets[i];
+            descriptorWrite.dstBinding = 0;
+            descriptorWrite.dstArrayElement = 0;
+            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorWrite.descriptorCount = 1;
+            descriptorWrite.pBufferInfo = &bufferInfo;
+            descriptorWrite.pImageInfo = nullptr;
+            descriptorWrite.pTexelBufferView = nullptr;
+
+            vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+        }
+    }
+
     void createCommandPool()
     {
         const QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice, surface);
@@ -1260,7 +1326,7 @@ private:
         vkResetCommandBuffer(commandBuffers[currentFrame], 0);
         recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
-        updateUniformBuffer(currentFrame);
+        updateUniformBuffer(imageIndex);
 
         const std::vector<VkSemaphore> waitSemaphores = {imageAvailableSemaphores[currentFrame]};
         const std::vector<VkPipelineStageFlags> waitStages = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
@@ -1349,6 +1415,8 @@ private:
 
         vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[imageIndex], 0, nullptr);
+
         vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
         vkCmdEndRenderPass(commandBuffer);
@@ -1370,6 +1438,8 @@ private:
         }
 
         vkDeviceWaitIdle(device);
+
+        cleanupSwapchain();
 
         createSwapchain();
         createImageViews();
