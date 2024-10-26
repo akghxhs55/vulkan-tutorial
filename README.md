@@ -4,4 +4,6 @@ Personal projects and exercises based on the [Vulkan tutorial](https://vulkan-tu
 
 ![Hello Triangle](images/hello-triangle.png)
 
+![Texture Mapping](images/texture-mapping.png)
+
 </div>
