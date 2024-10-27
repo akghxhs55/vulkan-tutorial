@@ -16,3 +16,6 @@ target_link_libraries(vulkan_tutorial Vulkan::Loader)
 
 find_package(stb REQUIRED)
 target_link_libraries(vulkan_tutorial stb::stb)
+
+find_package(tinyobjloader REQUIRED)
+target_link_libraries(vulkan_tutorial tinyobjloader::tinyobjloader)
