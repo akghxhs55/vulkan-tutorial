@@ -6,4 +6,6 @@ Personal projects and exercises based on the [Vulkan tutorial](https://vulkan-tu
 
 ![Texture Mapping](images/texture-mapping.png)
 
+![Loading Models](images/loading-models.png)
+
 </div>
